@@ -1,0 +1,2 @@
+nasm -f win64 -o AsmSnake.obj AsmSnake.asm &&
+link AsmSnake.obj -debug -subsystem:console -libpath:c:\lib64 -libpath:lib -out:AsmSnake.exe -entry:Main raylib.lib opengl32.lib kernel32.lib user32.lib gdi32.lib winmm.lib shell32.lib msvcrt.lib legacy_stdio_definitions.lib
