@@ -2,15 +2,14 @@ bits 64
 default rel
 
 segment .data
-    msg db "Hello, World! %d", 0xd, 0xa, 0
-    allocationMsg db "Current snake segment allocations: %llu", 0xd, 0xa, 0
-    positionMsg db "Current snake segment position: %f", 0xd, 0xa, 0
-    windowTitle db "raylib window", 0
+    windowTitle db "AsmSnake", 0
     segmentSize dd 16.0
-    mapSize dd 32.0 ; Gets multiplied by segment size at runtime.
+    mapSizeInSegments dd 32
+    mapSize dd 0.0 ; Gets set to mapSizeInSegments * segmentSize at runtime.
+    halfMapSize dd 0.0
     zero dd 0.0
     negativeOne dd -1.0
-    testFloat dq 777.0
+    two dd 2.0
 
 segment .text
 global Main
@@ -32,11 +31,14 @@ extern EndDrawing
 extern DrawRectangle
 extern DrawRectangleRec
 extern IsKeyDown
+extern GetRandomValue
 
 KeyRight equ 262
 KeyLeft equ 263
 KeyDown equ 264
 KeyUp equ 265
+
+DefaultSnakeSegmentCount equ 3
 
 Main:
     ; Pushing rbp onto the stack aligns it to an increment of 16
@@ -49,20 +51,22 @@ Main:
     ; rsp + 24 = qword snake segment capacity
     ; rsp + 32 = dword snake direction x
     ; rsp + 36 = dword snake direction y
-    ; rsp + 40 = qword is first move
+    ; rsp + 40 = dword apple x
+    ; rsp + 44 = dword apple y
 
     ; Scale the map size by the snake's segment size.
-    movss xmm0, [mapSize]
+    cvtsi2ss xmm0, [mapSizeInSegments]
     mulss xmm0, [segmentSize]
     movss [mapSize], xmm0
 
+    movss xmm0, [mapSize]
+    divss xmm0, [two]
+    movss [halfMapSize], xmm0
+
+    ; Start-up and create the window.
     sub rsp, 32
     call _CRT_INIT
     add rsp, 32
-
-    mov rax, 22
-    call PrintMsg
-    call PrintMsg
 
     sub rsp, 32
     cvtss2si rcx, [mapSize]
@@ -76,7 +80,8 @@ Main:
     call SetTargetFPS
     add rsp, 32
 
-    mov qword [rsp + 16], 1
+    ; Create the snake.
+    mov qword [rsp + 16], DefaultSnakeSegmentCount
     mov qword [rsp + 24], 4
 
     mov rax, 16
@@ -86,21 +91,20 @@ Main:
     sub rsp, 32
     call malloc
     add rsp, 32
-
     mov [rsp + 8], rax
-    mov rax, [rsp + 8]
-    mov dword [rax], __float32__(0.0)
-    mov dword [rax + 1 * 4], __float32__(0.0)
-    movss xmm0, [segmentSize]
-    movss dword [rax + 2 * 4], xmm0
-    movss dword [rax + 3 * 4], xmm0
+
+    mov rcx, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call PopulateSnakeSegments
 
     movss xmm0, [segmentSize]
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
     movss [rsp + 36], xmm0
 
-    mov qword [rsp + 40], 1 ; This is the first move.
+    lea rcx, [rsp + 40]
+    lea rdx, [rsp + 44]
+    call RandomizeApplePosition
 
 .GameLoopBegin:
     sub rsp, 32
@@ -111,6 +115,13 @@ Main:
     jne .GameLoopEnd
 
     ;; Update:
+    mov rax, [rsp + 8]
+    movss xmm0, [rax]
+    comiss xmm0, [rsp + 40]
+    jne .ExpandSnakeEnd
+    movss xmm0, [rax + 4]
+    comiss xmm0, [rsp + 44]
+    jne .ExpandSnakeEnd
 
     ; Expand snake.
     mov rax, [rsp + 16]
@@ -138,9 +149,15 @@ Main:
     movss [rax + rdi], xmm0
     movss [rax + rdi + 1 * 4], xmm1
     movss xmm0, [segmentSize]
-    movss dword [rax + rdi + 2 * 4], xmm0
-    movss dword [rax + rdi + 3 * 4], xmm0
+    movss [rax + rdi + 2 * 4], xmm0
+    movss [rax + rdi + 3 * 4], xmm0
 
+    ; Move the apple to a new location.
+    lea rcx, [rsp + 40]
+    lea rdx, [rsp + 44]
+    call RandomizeApplePosition
+
+.ExpandSnakeEnd:
     ; Move snake.
     ; First move every segment to the position of the segment ahead of it.
     mov rdi, [rsp + 16]
@@ -153,10 +170,6 @@ Main:
 .MoveSegmentsBegin:
     cmp rdi, 16
     jl .MoveSegmentsEnd
-
-    ; Don't check for collisions on the first move (before the head has a chance to move).
-    cmp qword [rsp + 40], 1
-    je .NoSegmentCollision
 
     movss xmm0, [rax + rdi]
     comiss xmm0, [rax]
@@ -174,8 +187,11 @@ Main:
     movss xmm0, [segmentSize]
     movss [rsp + 32], xmm0
 
-    mov qword [rsp + 16], 1
-    mov qword [rsp + 40], 1 ; The snake is back on its first move.
+    mov qword [rsp + 16], DefaultSnakeSegmentCount
+    mov rcx, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call PopulateSnakeSegments
+
     jmp .GameLoopBegin
 
 .NoSegmentCollision:
@@ -273,7 +289,7 @@ Main:
 .WrapBackXEnd:
 
 .WrapForwardXBegin:
-    comiss xmm0, dword [zero]
+    comiss xmm0, [zero]
     jae .WrapForwardXEnd
 
     addss xmm0, [mapSize]
@@ -304,15 +320,13 @@ Main:
 .WrapForwardYEnd:
     movss [rax + 4], xmm0
 
-    mov qword [rsp + 40], 0 ; It is no longer the first move.
-
     ;; Draw:
     sub rsp, 32
     call BeginDrawing
     add rsp, 32
 
     sub rsp, 32
-    mov rcx, 0xffffff
+    mov rcx, 0xff228822
     call ClearBackground
     add rsp, 32
 
@@ -322,6 +336,20 @@ Main:
     mov r10, 16
     mul r10
     mov r10, rax
+
+    ; Draw the apple.
+    movss xmm0, [rsp + 40]
+    movss xmm1, [rsp + 44]
+    sub rsp, 32 + 16
+    movss [rsp + 32], xmm0
+    movss [rsp + 32 + 1 * 4], xmm1
+    movss xmm0, [segmentSize]
+    movss [rsp + 32 + 2 * 4], xmm0
+    movss [rsp + 32 + 3 * 4], xmm0
+    lea rcx, [rsp + 32]
+    mov rdx, 0xff0000ff
+    call DrawRectangleRec
+    add rsp, 32 + 16
 
 .DrawSnakeBegin:
     cmp rdi, r10
@@ -338,7 +366,7 @@ Main:
     movss xmm0, [rax + rdi + 3 * 4]
     movss [rsp + 32 + 3 * 4], xmm0
     lea rcx, [rsp + 32]
-    mov rdx, 0xff0000ff
+    mov rdx, 0xff00ff00
     call DrawRectangleRec
     add rsp, 32 + 16
 
@@ -367,22 +395,6 @@ Main:
 
     xor rcx, rcx
     call ExitProcess
-
-PrintMsg:
-    push rbp
-    mov rbp, rsp
-
-    sub rsp, 32
-    lea rcx, [msg]
-    mov rdx, rax
-    call printf
-    add rsp, 32
-
-    mov rax, 44
-
-    mov rsp, rbp
-    pop rbp
-    ret
 
 ; rcx = pointer to snake segments (double pointer), rdx = snake segment count, r8 = snake segment capacity
 ; Returns new capacity.
@@ -419,6 +431,70 @@ EnsureSnakeCapacity:
 .End:
     mov rax, [rsp + 16]
 
+    mov rsp, rbp
+    pop rbp
+    ret
+
+; rcx = pointer to apple x, rdx = pointer to apple y
+RandomizeApplePosition:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+    mov [rsp], rcx
+    mov [rsp + 8], rdx
+
+    sub rsp, 32
+    mov rcx, 0
+    mov rdx, [mapSizeInSegments]
+    dec rdx
+    call GetRandomValue
+    add rsp, 32
+    cvtsi2ss xmm0, rax
+    mulss xmm0, [segmentSize]
+    mov rax, [rsp]
+    movss [rax], xmm0
+
+    sub rsp, 32
+    mov rcx, 0
+    mov rdx, [mapSizeInSegments]
+    dec rdx
+    call GetRandomValue
+    add rsp, 32
+    cvtsi2ss xmm0, rax
+    mulss xmm0, [segmentSize]
+    mov rax, [rsp + 8]
+    movss [rax], xmm0
+
+    mov rsp, rbp
+    pop rbp
+    ret
+
+; rcx = snake segments, rdx = snake segment count
+PopulateSnakeSegments:
+    push rbp
+    mov rbp, rsp
+
+    movss xmm0, [halfMapSize] ; Segment x.
+    movss xmm1, [segmentSize] ; Segment size.
+    movss xmm3, [halfMapSize] ; Segment y.
+    mov rdi, 0
+
+.PopulateSnakeBegin:
+    cmp rdi, rdx
+    jge .PopulateSnakeEnd
+
+    movss [rcx], xmm0
+    movss [rcx + 1 * 4], xmm3
+    movss [rcx + 2 * 4], xmm1
+    movss [rcx + 3 * 4], xmm1
+
+    inc rdi
+    add rcx, 16
+    subss xmm0, [segmentSize]
+
+    jmp .PopulateSnakeBegin
+
+.PopulateSnakeEnd:
     mov rsp, rbp
     pop rbp
     ret
