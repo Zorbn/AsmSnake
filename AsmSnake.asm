@@ -4,9 +4,11 @@ default rel
 segment .data
     windowTitle db "AsmSnake", 0
     scoreFormat db "%-15llu", 0
-    segmentSize dd 16.0
-    mapSizeInSegments dd 32
-    mapSize dd 0.0 ; Gets set to mapSizeInSegments * segmentSize at runtime.
+    snakeSegmentColors dd 0xff49cc7e, 0xffad8f15, 0xffff3740, 0xffff4d88, 0xff3540db, 0xff3399ff, 0xff00d0fa
+    snakeSegmentColorCount dq 7
+    snakeSegmentSize dd 16.0
+    mapSizeInSnakeSegments dd 32
+    mapSize dd 0.0 ; Gets set to mapSizeInSnakeSegments * snakeSegmentSize at runtime.
     halfMapSize dd 0.0
     zero dd 0.0
     negativeOne dd -1.0
@@ -46,6 +48,11 @@ KeyUp equ 265
 TargetFPS equ 144
 
 DefaultSnakeSegmentCount equ 3
+SnakeSegmentByteSize equ 32
+SnakeSegmentColorIncrement equ 64
+; Snake segment fields:
+; 0 = Rectangle
+; 16 = Color
 
 ScoreX equ 8
 ScoreY equ 8
@@ -67,8 +74,8 @@ Main:
     ; rsp + 48 = dword update timer
 
     ; Scale the map size by the snake's segment size.
-    cvtsi2ss xmm0, [mapSizeInSegments]
-    mulss xmm0, [segmentSize]
+    cvtsi2ss xmm0, [mapSizeInSnakeSegments]
+    mulss xmm0, [snakeSegmentSize]
     movss [mapSize], xmm0
 
     movss xmm0, [mapSize]
@@ -104,7 +111,7 @@ Main:
     mov qword [rsp + 16], DefaultSnakeSegmentCount
     mov qword [rsp + 24], 4
 
-    mov rax, 16
+    mov rax, SnakeSegmentByteSize
     mov rcx, [rsp + 24]
     mul rcx
     mov rcx, rax
@@ -117,7 +124,7 @@ Main:
     mov rdx, [rsp + 16]
     call PopulateSnakeSegments
 
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
     movss [rsp + 36], xmm0
@@ -147,7 +154,7 @@ Main:
 
     cmp al, 0
     je .MoveRightEnd
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
     movss [rsp + 36], xmm0
@@ -161,7 +168,7 @@ Main:
 
     cmp al, 0
     je .MoveLeftEnd
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     mulss xmm0, [negativeOne]
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
@@ -176,7 +183,7 @@ Main:
 
     cmp al, 0
     je .MoveUpEnd
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     mulss xmm0, [negativeOne]
     movss [rsp + 36], xmm0
     movss xmm0, [zero]
@@ -191,7 +198,7 @@ Main:
 
     cmp al, 0
     je .MoveDownEnd
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rsp + 36], xmm0
     movss xmm0, [zero]
     movss [rsp + 32], xmm0
@@ -232,20 +239,27 @@ Main:
     ; Get position of the second to last segment.
     mov rdi, [rsp + 16]
     dec rdi
-    mov rax, 16
+    mov rax, SnakeSegmentByteSize
     mul rdi
     mov rdi, rax
     mov rax, [rsp + 8]
 
-    movss xmm0, [rax + rdi - 16]
-    movss xmm1, [rax + rdi - 16 + 1 * 4]
+    movss xmm0, [rax + rdi - SnakeSegmentByteSize]
+    movss xmm1, [rax + rdi - SnakeSegmentByteSize + 1 * 4]
+    mov rcx, [rsp + 16]
+    push rdi
+    call GetNextSnakeSegmentColor
+    pop rdi
+    mov ecx, eax
+    mov rax, [rsp + 8]
 
     ; Set the position of the new segment to match the second to last segment.
     movss [rax + rdi], xmm0
     movss [rax + rdi + 1 * 4], xmm1
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rax + rdi + 2 * 4], xmm0
     movss [rax + rdi + 3 * 4], xmm0
+    mov [rax + rdi + 4 * 4], ecx
 
     ; Move the apple to a new location.
     lea rcx, [rsp + 40]
@@ -257,13 +271,13 @@ Main:
     ; First move every segment to the position of the segment ahead of it.
     mov rdi, [rsp + 16]
     dec rdi
-    mov rax, 16
+    mov rax, SnakeSegmentByteSize
     mul rdi
     mov rdi, rax
     mov rax, [rsp + 8]
 
 .MoveSegmentsBegin:
-    cmp rdi, 16
+    cmp rdi, SnakeSegmentByteSize
     jl .MoveSegmentsEnd
 
     movss xmm0, [rax + rdi]
@@ -279,7 +293,7 @@ Main:
     movss [rax], xmm0
     movss [rax + 4], xmm0
     movss [rsp + 36], xmm0
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rsp + 32], xmm0
 
     mov qword [rsp + 16], DefaultSnakeSegmentCount
@@ -290,12 +304,12 @@ Main:
     jmp .GameLoopBegin
 
 .NoSegmentCollision:
-    movss xmm0, [rax + rdi - 16]
-    movss xmm1, [rax + rdi - 16 + 1 * 4]
+    movss xmm0, [rax + rdi - SnakeSegmentByteSize]
+    movss xmm1, [rax + rdi - SnakeSegmentByteSize + 1 * 4]
     movss [rax + rdi], xmm0
     movss [rax + rdi + 1 * 4], xmm1
 
-    sub rdi, 16
+    sub rdi, SnakeSegmentByteSize
 
     jmp .MoveSegmentsBegin
 
@@ -370,7 +384,7 @@ Main:
     mov rdi, 0
 
     mov rax, [rsp + 16]
-    mov r10, 16
+    mov r10, SnakeSegmentByteSize
     mul r10
     mov r10, rax
 
@@ -380,7 +394,7 @@ Main:
     sub rsp, 32 + 16
     movss [rsp + 32], xmm0
     movss [rsp + 32 + 1 * 4], xmm1
-    movss xmm0, [segmentSize]
+    movss xmm0, [snakeSegmentSize]
     movss [rsp + 32 + 2 * 4], xmm0
     movss [rsp + 32 + 3 * 4], xmm0
     lea rcx, [rsp + 32]
@@ -403,11 +417,11 @@ Main:
     movss xmm0, [rax + rdi + 3 * 4]
     movss [rsp + 32 + 3 * 4], xmm0
     lea rcx, [rsp + 32]
-    mov rdx, 0xff00ff00
+    mov edx, [rax + rdi + 4 * 4]
     call DrawRectangleRec
     add rsp, 32 + 16
 
-    add rdi, 16
+    add rdi, SnakeSegmentByteSize
 
     jmp .DrawSnakeBegin
 
@@ -476,7 +490,7 @@ EnsureSnakeCapacity:
     ; Save new capacity to return to caller.
     mov [rsp + 16], rax
     ; Convert capacity into new allocation size.
-    mov rcx, 16
+    mov rcx, SnakeSegmentByteSize
     mul rcx
     mov rdx, rax
 
@@ -505,23 +519,23 @@ RandomizeApplePosition:
 
     sub rsp, 32
     mov rcx, 0
-    mov rdx, [mapSizeInSegments]
+    mov rdx, [mapSizeInSnakeSegments]
     dec rdx
     call GetRandomValue
     add rsp, 32
     cvtsi2ss xmm0, rax
-    mulss xmm0, [segmentSize]
+    mulss xmm0, [snakeSegmentSize]
     mov rax, [rsp]
     movss [rax], xmm0
 
     sub rsp, 32
     mov rcx, 0
-    mov rdx, [mapSizeInSegments]
+    mov rdx, [mapSizeInSnakeSegments]
     dec rdx
     call GetRandomValue
     add rsp, 32
     cvtsi2ss xmm0, rax
-    mulss xmm0, [segmentSize]
+    mulss xmm0, [snakeSegmentSize]
     mov rax, [rsp + 8]
     movss [rax], xmm0
 
@@ -533,14 +547,18 @@ RandomizeApplePosition:
 PopulateSnakeSegments:
     push rbp
     mov rbp, rsp
+    sub rsp, 16
+
+    mov [rsp], rdx
 
     movss xmm0, [halfMapSize] ; Segment x.
-    movss xmm1, [segmentSize] ; Segment size.
+    movss xmm1, [snakeSegmentSize] ; Segment size.
     movss xmm3, [halfMapSize] ; Segment y.
+    mov eax, 0xff000000 ; Segment color.
     mov rdi, 0
 
 .PopulateSnakeBegin:
-    cmp rdi, rdx
+    cmp rdi, [rsp]
     jge .PopulateSnakeEnd
 
     movss [rcx], xmm0
@@ -548,13 +566,47 @@ PopulateSnakeSegments:
     movss [rcx + 2 * 4], xmm1
     movss [rcx + 3 * 4], xmm1
 
+    push rcx
+    mov rcx, rdi
+    inc rcx ; GetNextSnakeSegmentColor wants the snake segment count, which is 1-based.
+    push rdi
+    call GetNextSnakeSegmentColor
+    pop rdi
+    pop rcx
+
+    mov [rcx + 4 * 4], eax
+
     inc rdi
-    add rcx, 16
-    subss xmm0, [segmentSize]
+    add rcx, SnakeSegmentByteSize
+
+    subss xmm0, [snakeSegmentSize]
 
     jmp .PopulateSnakeBegin
 
 .PopulateSnakeEnd:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+; rcx = snake segment count
+; returns the next color
+GetNextSnakeSegmentColor:
+    push rbp
+    mov rbp, rsp
+
+    mov rdx, 0
+    mov rax, rcx
+    dec rax
+    mov rcx, [snakeSegmentColorCount]
+    div rcx
+
+    mov rax, 4
+    mul rdx
+
+    mov rdi, snakeSegmentColors
+    add rdi, rax
+    mov eax, [rdi]
+
     mov rsp, rbp
     pop rbp
     ret
