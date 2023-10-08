@@ -146,6 +146,11 @@ Main:
     ; Record user input.
     ; Do this regardless of if an update is happening this frame, to avoid missing inputs.
 
+    ; Don't let the snake turn 180 degrees back onto itself in the x direction.
+    movss xmm0, [zero]
+    comiss xmm0, [rsp + 32]
+    jne .MoveXEnd
+
     ; Move right if the right arrow is pressed.
     sub rsp, 32
     mov rcx, KeyRight
@@ -158,8 +163,8 @@ Main:
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
     movss [rsp + 36], xmm0
-    .MoveRightEnd:
 
+.MoveRightEnd:
     ; Move left if the left arrow is pressed.
     sub rsp, 32
     mov rcx, KeyLeft
@@ -173,7 +178,13 @@ Main:
     movss [rsp + 32], xmm0
     movss xmm0, [zero]
     movss [rsp + 36], xmm0
-    .MoveLeftEnd:
+
+.MoveLeftEnd:
+.MoveXEnd:
+    ; Don't let the snake turn 180 degrees back onto itself in the y direction.
+    movss xmm0, [zero]
+    comiss xmm0, [rsp + 36]
+    jne .MoveYEnd
 
     ; Move up if the up arrow is pressed.
     sub rsp, 32
@@ -188,8 +199,8 @@ Main:
     movss [rsp + 36], xmm0
     movss xmm0, [zero]
     movss [rsp + 32], xmm0
-    .MoveUpEnd:
 
+.MoveUpEnd:
     ; Move down if the down arrow is pressed.
     sub rsp, 32
     mov rcx, KeyDown
@@ -202,8 +213,9 @@ Main:
     movss [rsp + 36], xmm0
     movss xmm0, [zero]
     movss [rsp + 32], xmm0
-    .MoveDownEnd:
 
+.MoveDownEnd:
+.MoveYEnd:
     ; Increment the update timer, and see if it is time for an update.
     sub rsp, 32
     call GetFrameTime
