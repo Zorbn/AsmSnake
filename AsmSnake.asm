@@ -11,6 +11,8 @@ segment .data
     zero dd 0.0
     negativeOne dd -1.0
     two dd 2.0
+    updateTime dd 1.0 ; Gets divided by updateRate at runtime.
+    updateRate dd 10.0
 
 segment .text
 global Main
@@ -34,11 +36,14 @@ extern DrawRectangle
 extern DrawRectangleRec
 extern IsKeyDown
 extern GetRandomValue
+extern GetFrameTime
 
 KeyRight equ 262
 KeyLeft equ 263
 KeyDown equ 264
 KeyUp equ 265
+
+TargetFPS equ 144
 
 DefaultSnakeSegmentCount equ 3
 
@@ -59,6 +64,7 @@ Main:
     ; rsp + 36 = dword snake direction y
     ; rsp + 40 = dword apple x
     ; rsp + 44 = dword apple y
+    ; rsp + 48 = dword update timer
 
     ; Scale the map size by the snake's segment size.
     cvtsi2ss xmm0, [mapSizeInSegments]
@@ -82,9 +88,17 @@ Main:
     add rsp, 32
 
     sub rsp, 32
-    mov rcx, 10
+    mov rcx, TargetFPS
     call SetTargetFPS
     add rsp, 32
+
+    ; Setup the update timer.
+    movss xmm0, [zero]
+    movss [rsp + 48], xmm0
+
+    movss xmm0, [updateTime]
+    divss xmm0, [updateRate]
+    movss [updateTime], xmm0
 
     ; Create the snake.
     mov qword [rsp + 16], DefaultSnakeSegmentCount
@@ -121,6 +135,81 @@ Main:
     jne .GameLoopEnd
 
     ;; Update:
+
+    ; Record user input.
+    ; Do this regardless of if an update is happening this frame, to avoid missing inputs.
+
+    ; Move right if the right arrow is pressed.
+    sub rsp, 32
+    mov rcx, KeyRight
+    call IsKeyDown
+    add rsp, 32
+
+    cmp al, 0
+    je .MoveRightEnd
+    movss xmm0, [segmentSize]
+    movss [rsp + 32], xmm0
+    movss xmm0, [zero]
+    movss [rsp + 36], xmm0
+    .MoveRightEnd:
+
+    ; Move left if the left arrow is pressed.
+    sub rsp, 32
+    mov rcx, KeyLeft
+    call IsKeyDown
+    add rsp, 32
+
+    cmp al, 0
+    je .MoveLeftEnd
+    movss xmm0, [segmentSize]
+    mulss xmm0, [negativeOne]
+    movss [rsp + 32], xmm0
+    movss xmm0, [zero]
+    movss [rsp + 36], xmm0
+    .MoveLeftEnd:
+
+    ; Move up if the up arrow is pressed.
+    sub rsp, 32
+    mov rcx, KeyUp
+    call IsKeyDown
+    add rsp, 32
+
+    cmp al, 0
+    je .MoveUpEnd
+    movss xmm0, [segmentSize]
+    mulss xmm0, [negativeOne]
+    movss [rsp + 36], xmm0
+    movss xmm0, [zero]
+    movss [rsp + 32], xmm0
+    .MoveUpEnd:
+
+    ; Move down if the down arrow is pressed.
+    sub rsp, 32
+    mov rcx, KeyDown
+    call IsKeyDown
+    add rsp, 32
+
+    cmp al, 0
+    je .MoveDownEnd
+    movss xmm0, [segmentSize]
+    movss [rsp + 36], xmm0
+    movss xmm0, [zero]
+    movss [rsp + 32], xmm0
+    .MoveDownEnd:
+
+    ; Increment the update timer, and see if it is time for an update.
+    sub rsp, 32
+    call GetFrameTime
+    add rsp, 32
+    addss xmm0, [rsp + 48]
+    movss [rsp + 48], xmm0
+
+    comiss xmm0, [updateTime]
+    jb .UpdateEnd
+
+    subss xmm0, [updateTime]
+    movss [rsp + 48], xmm0
+
     mov rax, [rsp + 8]
     movss xmm0, [rax]
     comiss xmm0, [rsp + 40]
@@ -212,65 +301,6 @@ Main:
 
 .MoveSegmentsEnd:
     ; Then move the head of the snake.
-
-    ; Move right if the right arrow is pressed.
-    sub rsp, 32
-    mov rcx, KeyRight
-    call IsKeyDown
-    add rsp, 32
-
-    cmp al, 0
-    je .MoveRightEnd
-    movss xmm0, [segmentSize]
-    movss [rsp + 32], xmm0
-    movss xmm0, [zero]
-    movss [rsp + 36], xmm0
-    .MoveRightEnd:
-
-    ; Move left if the left arrow is pressed.
-    sub rsp, 32
-    mov rcx, KeyLeft
-    call IsKeyDown
-    add rsp, 32
-
-    cmp al, 0
-    je .MoveLeftEnd
-    movss xmm0, [segmentSize]
-    mulss xmm0, [negativeOne]
-    movss [rsp + 32], xmm0
-    movss xmm0, [zero]
-    movss [rsp + 36], xmm0
-    .MoveLeftEnd:
-
-    ; Move up if the up arrow is pressed.
-    sub rsp, 32
-    mov rcx, KeyUp
-    call IsKeyDown
-    add rsp, 32
-
-    cmp al, 0
-    je .MoveUpEnd
-    movss xmm0, [segmentSize]
-    mulss xmm0, [negativeOne]
-    movss [rsp + 36], xmm0
-    movss xmm0, [zero]
-    movss [rsp + 32], xmm0
-    .MoveUpEnd:
-
-    ; Move down if the down arrow is pressed.
-    sub rsp, 32
-    mov rcx, KeyDown
-    call IsKeyDown
-    add rsp, 32
-
-    cmp al, 0
-    je .MoveDownEnd
-    movss xmm0, [segmentSize]
-    movss [rsp + 36], xmm0
-    movss xmm0, [zero]
-    movss [rsp + 32], xmm0
-    .MoveDownEnd:
-
     ; Move the head based on user input.
     mov rax, [rsp + 8]
 
@@ -326,6 +356,7 @@ Main:
 .WrapForwardYEnd:
     movss [rax + 4], xmm0
 
+.UpdateEnd:
     ;; Draw:
     sub rsp, 32
     call BeginDrawing
