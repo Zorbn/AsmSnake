@@ -3,6 +3,7 @@ default rel
 
 segment .data
     windowTitle db "AsmSnake", 0
+    scoreFormat db "%-15llu", 0
     segmentSize dd 16.0
     mapSizeInSegments dd 32
     mapSize dd 0.0 ; Gets set to mapSizeInSegments * segmentSize at runtime.
@@ -17,6 +18,7 @@ global Main
 extern _CRT_INIT
 extern ExitProcess
 extern printf
+extern sprintf
 extern malloc
 extern realloc
 
@@ -39,6 +41,10 @@ KeyDown equ 264
 KeyUp equ 265
 
 DefaultSnakeSegmentCount equ 3
+
+ScoreX equ 8
+ScoreY equ 8
+ScoreSize equ 32
 
 Main:
     ; Pushing rbp onto the stack aligns it to an increment of 16
@@ -375,6 +381,29 @@ Main:
     jmp .DrawSnakeBegin
 
 .DrawSnakeEnd:
+    ; Draw the score (based on the segment count).
+    mov r8, [rsp + 16]
+    sub r8, DefaultSnakeSegmentCount
+
+    sub rsp, 16
+    lea rcx, [rsp]
+    lea rdx, [scoreFormat]
+
+    sub rsp, 32
+    call sprintf
+    add rsp, 32
+
+    lea rcx, [rsp]
+    mov rdx, ScoreX
+    mov r8, ScoreY
+    mov r9, ScoreSize
+
+    sub rsp, 32 + 16
+    mov dword [rsp + 32], 0xffffffff
+    call DrawText
+    add rsp, 32 + 16
+    add rsp, 16
+
     sub rsp, 32
     call EndDrawing
     add rsp, 32
